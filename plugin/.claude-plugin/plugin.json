@@ -2,5 +2,7 @@
   "name": "ratchet",
   "description": "Workflow discipline for Claude Code: plan-first, minimal-code, and auto-generated regression tests/scripts for whatever project it's installed in.",
   "version": "0.1.0",
-  "author": { "name": "Joshua Carlile" }
+  "author": { "name": "Joshua Carlile" },
+  "license": "MIT",
+  "repository": "https://github.com/joshuarcarlile-cpu/ratchet"
 }
