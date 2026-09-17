@@ -1,0 +1,5 @@
+schema_version: "1.1"
+name: log-fix-handoff
+tags: [smoke]
+context:
+  scaffold_script: fixture.sh

@@ -1,0 +1,7 @@
+{
+  "name": "ratchet-marketplace",
+  "owner": { "name": "Joshua Carlile" },
+  "plugins": [
+    { "name": "ratchet", "source": "./plugin" }
+  ]
+}
