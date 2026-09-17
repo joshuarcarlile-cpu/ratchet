@@ -1,5 +1,5 @@
 ---
-description: Applies a build-least-code decision ladder before writing new code. Use whenever about to add a new function, file, dependency, or abstraction.
+description: Checks for reusable existing code before writing anything new. Use this before writing any new function, helper, utility, script, or file, even a small or "obvious" one — including requests like "write a function that does X" or "I need something that does Y somewhere in this codebase."
 ---
 
 # Minimalism
