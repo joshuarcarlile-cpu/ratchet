@@ -1,0 +1,4 @@
+{"ts":1789670147,"cmd":"cd \"C:/Program Files/x\" && ls"}
+not json at all
+{"ts":1789670155,"cmd":"git status --short"}
+[1,2,3]

@@ -26,6 +26,25 @@ claude --plugin-dir ./plugin
 
 Then `/reload-plugins` after editing any skill, hook, or agent file.
 
+### Layout
+
+Hook logic lives in `plugin/scripts/*.py`; `plugin/bin/ratchet-hook.sh` is a thin
+dispatcher that locates the script and an interpreter. Keeping the logic in
+Python rather than shell is deliberate — it parses and emits JSON with the `json`
+module instead of by hand, and it runs the same way on Windows, macOS and Linux.
+
+### Tests
+
+Two tiers, because they catch different things:
+
+```bash
+python plugin/scripts/tests/test_hooks.py   # hook logic — deterministic
+claude plugin eval                          # model behaviour — the skills firing
+```
+
+The eval suite grades what Claude *does*; it cannot catch a hook that mangles its
+own input. Both bugs the unit tests pin down shipped because that tier was missing.
+
 To rehearse the real marketplace flow without pushing anywhere:
 
 ```

@@ -4,13 +4,13 @@
       {
         "matcher": "Write|Edit",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/check-file-size.sh\"" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" check_file_size.py" }
         ]
       },
       {
         "matcher": "Bash",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/log-tool-call.sh\"" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" log_tool_call.py" }
         ]
       }
     ]
