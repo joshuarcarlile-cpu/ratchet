@@ -13,6 +13,13 @@
           { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" log_tool_call.py" }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" require_verification.py" }
+        ]
+      }
     ]
   }
 }

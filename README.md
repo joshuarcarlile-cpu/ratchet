@@ -8,6 +8,12 @@ A Claude Code plugin that adds workflow discipline on top of whatever project it
 - **`plan-first` skill** — enforces explore → plan → review → implement → verify for non-trivial changes, with a mandatory verification check defined before any code is written.
 - **`minimalism` skill** — a YAGNI decision ladder Claude applies before writing new code, to avoid over-building.
 - **File-size hook** — warns when an edited file crosses a line-count threshold (default 400, override with `RATCHET_FILE_SIZE_THRESHOLD`), so files stay slim and context/drift stays manageable.
+- **`verify` skill + `Stop` hook** — refuses to end a turn on code that changed
+  without a passing check. The check runs through ratchet's own runner, which
+  records the receipt, so a pass cannot be asserted — only a real zero exit
+  clears the gate. Change detection scans the filesystem rather than tool events,
+  so an edit made through Bash counts the same as one made through Edit. The gate
+  stands down after two nudges rather than trapping you.
 - **`log-fix` skill + `regression-writer` subagent** — after a bug fix is verified, writes a regression test in the project's own test framework and appends a one-line gotcha note to the profile.
 - **Tool-call logging hook + `find-patterns` skill** — logs Bash command shapes to `.claude/framework/tool-log.jsonl`; `find-patterns` flags sequences repeated often enough to be worth turning into a script.
 

@@ -12,12 +12,21 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import hook_io  # noqa: E402
+import session_state  # noqa: E402
 
 MAX_COMMAND_LENGTH = 120
 
 
 def main():
     event = hook_io.read_event()
+
+    # Bash is often the first tool a session touches, and the verification gate
+    # needs a session baseline from whichever ratchet hook runs first.
+    try:
+        session_state.touch_session(event)
+    except OSError:
+        pass
+
     command = hook_io.tool_input(event, "command")
     if not command or not isinstance(command, str):
         return 0
