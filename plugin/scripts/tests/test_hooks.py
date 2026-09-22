@@ -23,22 +23,35 @@ import check_file_size  # noqa: E402
 import hook_io  # noqa: E402
 
 
-def run_hook(script_name, event, env=None, cwd=None):
-    """Run a hook end to end the way Claude Code does: JSON on stdin."""
+def run_hook(script_name, event=None, env=None, cwd=None, raw=None):
+    """Run a hook end to end the way Claude Code does: JSON on stdin.
+
+    Always hands the hook a throwaway project dir unless the caller names one.
+    Without it the hook falls back to the cwd and writes its state into the
+    source tree -- which is the very bug these tests exist to pin down.
+    """
     environment = dict(os.environ)
-    environment.pop("CLAUDE_PROJECT_DIR", None)
     environment.pop("CLAUDE_PLUGIN_ROOT", None)
+
+    scratch = None
+    if not (env or {}).get("CLAUDE_PROJECT_DIR"):
+        scratch = tempfile.TemporaryDirectory()
+        environment["CLAUDE_PROJECT_DIR"] = scratch.name
     if env:
         environment.update(env)
-    proc = subprocess.run(
-        [sys.executable, os.path.join(SCRIPTS_DIR, script_name)],
-        input=json.dumps(event),
-        capture_output=True,
-        text=True,
-        env=environment,
-        cwd=cwd,
-    )
-    return proc
+
+    try:
+        return subprocess.run(
+            [sys.executable, os.path.join(SCRIPTS_DIR, script_name)],
+            input=raw if raw is not None else json.dumps(event or {}),
+            capture_output=True,
+            text=True,
+            env=environment,
+            cwd=cwd,
+        )
+    finally:
+        if scratch is not None:
+            scratch.cleanup()
 
 
 class TestEventParsing(unittest.TestCase):
@@ -187,12 +200,7 @@ class TestLogToolCall(unittest.TestCase):
             self.assertFalse(os.path.exists(log))
 
     def test_hook_exits_zero_on_garbage_input(self):
-        proc = subprocess.run(
-            [sys.executable, os.path.join(SCRIPTS_DIR, "log_tool_call.py")],
-            input="not json at all",
-            capture_output=True,
-            text=True,
-        )
+        proc = run_hook("log_tool_call.py", raw="not json at all")
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
 

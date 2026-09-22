@@ -1,8 +1,17 @@
 {
   "name": "ratchet",
-  "description": "Workflow discipline for Claude Code: plan-first, minimal-code, and auto-generated regression tests/scripts for whatever project it's installed in.",
-  "version": "0.1.0",
-  "author": { "name": "Joshua Carlile" },
+  "description": "Workflow discipline for Claude Code: plan-first, minimal-code, and a verification gate that refuses to call unverified work done.",
+  "version": "0.2.0",
+  "author": {
+    "name": "Joshua Carlile"
+  },
   "license": "MIT",
-  "repository": "https://github.com/joshuarcarlile-cpu/ratchet"
+  "repository": "https://github.com/joshuarcarlile-cpu/ratchet",
+  "keywords": [
+    "workflow",
+    "discipline",
+    "planning",
+    "verification",
+    "testing"
+  ]
 }
