@@ -9,13 +9,17 @@ how the two bugs these tests pin down shipped in the first place.
 import io
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS_DIR = os.path.normpath(os.path.join(TEST_DIR, ".."))
+PLUGIN_DIR = os.path.normpath(os.path.join(SCRIPTS_DIR, ".."))
 FIXTURES_DIR = os.path.join(TEST_DIR, "fixtures")
 sys.path.insert(0, SCRIPTS_DIR)
 
@@ -203,6 +207,21 @@ class TestLogToolCall(unittest.TestCase):
         proc = run_hook("log_tool_call.py", raw="not json at all")
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
+    def test_powershell_command_is_logged(self):
+        """The PowerShell tool sends the same `command` field as Bash, so the
+        script needs no change once hooks.json routes PowerShell to it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            run_hook(
+                "log_tool_call.py",
+                {"tool_name": "PowerShell",
+                 "tool_input": {"command": "Get-ChildItem -LiteralPath $p"}},
+                env={"CLAUDE_PROJECT_DIR": tmp},
+            )
+            log = os.path.join(tmp, ".claude", "framework", "tool-log.jsonl")
+            record, ok = hook_io.read_jsonl(log)[0]
+            self.assertTrue(ok)
+            self.assertEqual(record["cmd"], "Get-ChildItem -LiteralPath $p")
+
 
 class TestReadJsonl(unittest.TestCase):
     def test_malformed_lines_are_flagged_not_dropped(self):
@@ -292,6 +311,124 @@ class TestCheckFileSize(unittest.TestCase):
                 env={"RATCHET_FILE_SIZE_THRESHOLD": "10"},
             )
             self.assertIn("50 lines", proc.stdout)
+
+
+class TestHooksManifest(unittest.TestCase):
+    """hooks.json fails silently: a matcher that misses a tool never fires."""
+
+    def _only(self, event_name, script_name):
+        """(matcher, hook) for the single hooks.json entry running a script."""
+        path = os.path.join(PLUGIN_DIR, "hooks", "hooks.json")
+        with open(path, "r", encoding="utf-8") as handle:
+            manifest = json.load(handle)
+        found = [
+            (group.get("matcher", ""), hook)
+            for group in manifest["hooks"].get(event_name, [])
+            for hook in group.get("hooks", [])
+            if script_name in hook.get("command", "")
+        ]
+        self.assertEqual(len(found), 1, f"{script_name} under {event_name}")
+        return found[0]
+
+    def test_logger_hears_bash_and_powershell(self):
+        """A `Bash`-only matcher never fires for the PowerShell tool, so a
+        session that only ran PowerShell logged nothing and never set the
+        gate's session baseline."""
+        matcher, _ = self._only("PostToolUse", "log_tool_call.py")
+        for tool in ("Bash", "PowerShell"):
+            self.assertTrue(
+                re.fullmatch(matcher, tool),
+                f"logger matcher {matcher!r} misses {tool}",
+            )
+
+    def test_logger_runs_async(self):
+        """The logger decides nothing, so no tool call should wait on it."""
+        _, hook = self._only("PostToolUse", "log_tool_call.py")
+        self.assertIs(hook.get("async"), True)
+
+    def test_steering_hooks_stay_synchronous(self):
+        """The size warning and the Stop gate talk back to Claude. An async
+        hook cannot block, and what it says arrives after Claude moved on."""
+        for event_name, script in (
+            ("PostToolUse", "check_file_size.py"),
+            ("Stop", "require_verification.py"),
+        ):
+            _, hook = self._only(event_name, script)
+            self.assertFalse(hook.get("async", False), script)
+
+
+class TestFrameworkIgnoresItself(unittest.TestCase):
+    """`.claude/framework/` is local state; it must never show up in git.
+
+    Like `.pytest_cache`, the folder carries its own `.gitignore` of `*`, so a
+    project needs no ignore entry of its own.
+    """
+
+    def setUp(self):
+        self._saved = os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        self._tmp = tempfile.TemporaryDirectory()
+        os.environ["CLAUDE_PROJECT_DIR"] = self._tmp.name
+        self.marker = os.path.join(
+            self._tmp.name, ".claude", "framework", ".gitignore"
+        )
+
+    def tearDown(self):
+        self._tmp.cleanup()
+        if self._saved is None:
+            os.environ.pop("CLAUDE_PROJECT_DIR", None)
+        else:
+            os.environ["CLAUDE_PROJECT_DIR"] = self._saved
+
+    def test_created_folder_ignores_itself(self):
+        hook_io.framework_dir(create=True)
+        with open(self.marker, "r", encoding="utf-8") as handle:
+            lines = [line.strip() for line in handle]
+        self.assertIn("*", lines)
+
+    def test_existing_gitignore_is_kept(self):
+        os.makedirs(os.path.dirname(self.marker))
+        with open(self.marker, "w", encoding="utf-8") as handle:
+            handle.write("tool-log.jsonl\n")
+        hook_io.framework_dir(create=True)
+        with open(self.marker, "r", encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "tool-log.jsonl\n")
+
+    def test_gitignore_write_failure_is_swallowed(self):
+        """Failing to write the marker must not cost the hook its real work."""
+        with mock.patch("hook_io.open", side_effect=PermissionError,
+                        create=True):
+            path = hook_io.framework_dir(create=True)
+        self.assertTrue(os.path.isdir(path))
+
+    @unittest.skipIf(shutil.which("git") is None, "git not on PATH")
+    def test_hook_state_is_ignored_by_git(self):
+        """End to end: after the hooks run, git sees nothing in the folder.
+
+        Git runs with an empty global config and no system config, so a
+        personal excludes file cannot make this pass by accident.
+        """
+        project = self._tmp.name
+        empty = os.path.join(project, "empty.gitconfig")
+        open(empty, "w").close()
+        git_env = dict(os.environ, GIT_CONFIG_GLOBAL=empty,
+                       GIT_CONFIG_NOSYSTEM="1")
+
+        def git(*args):
+            return subprocess.run(["git", *args], cwd=project, env=git_env,
+                                  capture_output=True, text=True)
+
+        self.assertEqual(git("init", "-q").returncode, 0)
+        run_hook("log_tool_call.py",
+                 {"session_id": "s1", "tool_input": {"command": "ls"}},
+                 env={"CLAUDE_PROJECT_DIR": project})
+
+        for name in ("tool-log.jsonl", "session-state.json"):
+            rel = f".claude/framework/{name}"
+            self.assertTrue(os.path.isfile(os.path.join(project, rel)), rel)
+            self.assertEqual(git("check-ignore", "-q", rel).returncode, 0,
+                             f"git does not ignore {rel}")
+        status = git("status", "--porcelain", "--untracked-files=all").stdout
+        self.assertNotIn(".claude", status)
 
 
 if __name__ == "__main__":

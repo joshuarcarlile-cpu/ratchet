@@ -1,7 +1,7 @@
 {
   "name": "ratchet",
   "description": "Workflow discipline for Claude Code: plan-first, minimal-code, and a verification gate that refuses to call unverified work done.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": {
     "name": "Joshua Carlile"
   },

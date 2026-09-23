@@ -72,11 +72,32 @@ def project_dir(event=None):
 
 
 def framework_dir(event=None, create=False):
-    """`<project>/.claude/framework`, where ratchet keeps its own state."""
+    """`<project>/.claude/framework`, where ratchet keeps its own state.
+
+    Every hook that writes here creates the folder through `create=True`, which
+    also gives it its own `.gitignore` of `*`, the way `.pytest_cache` does. The
+    contents are per-machine bookkeeping, so no project should need an ignore
+    entry of its own to keep them out of a commit.
+    """
     path = os.path.join(project_dir(event), ".claude", "framework")
     if create:
         os.makedirs(path, exist_ok=True)
+        _ignore_self(path)
     return path
+
+
+def _ignore_self(path):
+    """Give a folder a `.gitignore` of `*` if it has none. Best-effort.
+
+    Exclusive-create mode never overwrites a file that is already there, and a
+    failure is swallowed: a marker that cannot be written must not cost the
+    hook the state it was about to save.
+    """
+    try:
+        with open(os.path.join(path, ".gitignore"), "x", encoding="utf-8") as handle:
+            handle.write("# Created by ratchet: local state, never committed.\n*\n")
+    except OSError:
+        pass
 
 
 def append_jsonl(path, record):

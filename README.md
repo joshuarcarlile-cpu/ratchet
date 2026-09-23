@@ -40,8 +40,11 @@ enforced, and is honest about the parts that cannot.
   events, so an edit made through Bash counts the same as one made through Edit.
 - **File-size warning** (`PostToolUse`) — flags files over a line budget
   (default 400, `RATCHET_FILE_SIZE_THRESHOLD` to change it).
-- **Tool-call logging** (`PostToolUse`) — records Bash command shapes for
-  `find-patterns` to mine.
+- **Tool-call logging** (`PostToolUse`, async) — records Bash and PowerShell
+  command shapes for `find-patterns` to mine.
+
+State lives in the project's `.claude/framework/`, which carries its own
+`.gitignore` of `*`, so it never needs an ignore entry of your own.
 
 **Guidance for the model** — skills it applies when they're relevant:
 

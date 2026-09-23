@@ -8,9 +8,9 @@
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" log_tool_call.py" }
+          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" log_tool_call.py", "async": true }
         ]
       }
     ],

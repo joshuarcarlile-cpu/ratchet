@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PostToolUse(Bash) hook: append a command signature to ratchet's tool log.
+"""PostToolUse(Bash|PowerShell) hook: append a command signature to the tool log.
 
 Logs the command *shape* only, truncated — never tool output. `find-patterns`
 reads this log to spot sequences worth turning into a script.
@@ -32,9 +32,9 @@ def main():
         return 0
 
     record = {"ts": int(time.time()), "cmd": command[:MAX_COMMAND_LENGTH]}
-    log_path = os.path.join(hook_io.framework_dir(event), "tool-log.jsonl")
     try:
-        hook_io.append_jsonl(log_path, record)
+        log_dir = hook_io.framework_dir(event, create=True)
+        hook_io.append_jsonl(os.path.join(log_dir, "tool-log.jsonl"), record)
     except OSError:
         # A hook that cannot write its log has nothing useful to say about it.
         # Failing loudly here would interrupt the user's actual work.

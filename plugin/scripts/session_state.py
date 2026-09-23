@@ -65,8 +65,8 @@ def load(event=None):
 
 
 def save(state, event=None):
+    hook_io.framework_dir(event, create=True)
     path = state_path(event)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as handle:
         json.dump(state, handle, indent=2, ensure_ascii=False)

@@ -33,8 +33,11 @@ export PYTHONDONTWRITEBYTECODE=1
 
 # `py -3` first on Windows: `python` there is often the Store shim, which is not
 # a working interpreter. Exit 0 on a miss — a hook that cannot run is not a
-# reason to fail the user's tool call.
-if command -v py >/dev/null 2>&1 && py -3 -c "" >/dev/null 2>&1; then
+# reason to fail the user's tool call. The launcher is trusted without a trial
+# run: probing it with `py -3 -c ""` started Python twice per hook, about 215 ms
+# on every event. A launcher with no Python 3 behind it now shows up as a hook
+# error rather than falling through to `python3`.
+if command -v py >/dev/null 2>&1; then
   exec py -3 "$script" "$@"
 elif command -v python3 >/dev/null 2>&1; then
   exec python3 "$script" "$@"
