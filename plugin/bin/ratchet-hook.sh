@@ -25,6 +25,12 @@ if [ ! -f "$script" ]; then
   exit 0
 fi
 
+# Hooks fire on every edit and every Bash call, and they run from the
+# installed plugin directory. Byte-compiling there drops __pycache__/ into
+# the plugin cache, which then diverges from source for no benefit: these
+# scripts are small and run once per event, so the cache buys nothing.
+export PYTHONDONTWRITEBYTECODE=1
+
 # `py -3` first on Windows: `python` there is often the Store shim, which is not
 # a working interpreter. Exit 0 on a miss — a hook that cannot run is not a
 # reason to fail the user's tool call.
