@@ -203,6 +203,8 @@ class TestCorruptState(StateTestCase):
 
 def run_script(name, args=None, env=None, stdin=""):
     environment = dict(os.environ)
+    # As ratchet-hook.sh does: no __pycache__/ in plugin/, which gets installed.
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     if env:
         environment.update(env)
     return subprocess.run(

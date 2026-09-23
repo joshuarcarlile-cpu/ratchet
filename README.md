@@ -106,8 +106,9 @@ python -B -m unittest discover -s plugin/scripts/tests -p "test_*.py"
 claude plugin eval
 ```
 
-`-B` keeps `__pycache__/` out of `plugin/`: the marketplace installs from this
-working tree, gitignored files included, so bytecode from a test run would ship.
+`-B` keeps `__pycache__/` out of `plugin/` (the tests' own subprocesses set
+`PYTHONDONTWRITEBYTECODE`): the marketplace installs from this working tree,
+gitignored files included, so bytecode from a test run would ship.
 
 Unit tests cover hook logic deterministically. Evals grade model behaviour. The
 eval tier cannot catch a hook that mangles its own input, and the unit tier

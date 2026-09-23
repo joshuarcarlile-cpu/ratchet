@@ -36,6 +36,8 @@ def run_hook(script_name, event=None, env=None, cwd=None, raw=None):
     """
     environment = dict(os.environ)
     environment.pop("CLAUDE_PLUGIN_ROOT", None)
+    # As ratchet-hook.sh does: no __pycache__/ in plugin/, which gets installed.
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
 
     scratch = None
     if not (env or {}).get("CLAUDE_PROJECT_DIR"):
