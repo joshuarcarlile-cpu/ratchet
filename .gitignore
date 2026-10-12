@@ -1,5 +1,6 @@
 plugin/evals/results/
 plugin/evals/mocks/.replay/
-.claude/
+.claude/*
+!.claude/PROJECT_PROFILE.md
 __pycache__/
 *.py[cod]
