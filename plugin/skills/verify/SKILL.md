@@ -1,5 +1,4 @@
 ---
-name: verify
 description: Runs the project's check command and shows its real output, recording the result so the verification gate can tell whether work was actually checked. Use after making a change, and whenever the Stop hook reports unverified edits.
 ---
 
