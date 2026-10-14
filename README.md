@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![Tests](https://img.shields.io/badge/tests-53%20passed-brightgreen.svg)](plugin/scripts/tests)
+[![Tests](https://img.shields.io/badge/tests-121%20passed-brightgreen.svg)](plugin/scripts/tests)
 
 Workflow discipline for **Claude Code**, as mechanism rather than advice.
 
@@ -16,14 +16,14 @@ enforced, and is honest about the parts that cannot.
 │   └─ PostToolUse ──> records the change, warns on file size  │
 │                                                              │
 │ Claude tries to end the turn                                 │
-│   └─ Stop ─────────> scans the worktree for changed code     │
+│   └─ Stop ─────────> finds the code Claude changed           │
 │                      no passing check newer than the change? │
 │                                                              │
 │                      BLOCKED                                 │
 │                      "app.py changed this session, and no    │
 │                       check has passed."                     │
 │                                                              │
-│ Claude runs the project's check through ratchet's runner     │
+│ Claude runs the project's check command                      │
 │   └─ exit 0 ───────> receipt recorded, gate clears           │
 │   └─ exit 1 ───────> gate stays armed                        │
 └──────────────────────────────────────────────────────────────┘
@@ -34,17 +34,26 @@ enforced, and is honest about the parts that cannot.
 **Enforced by hooks** — these do not depend on the model cooperating:
 
 - **Verification gate** (`verify` skill + `Stop` hook) — refuses to end a turn on
-  code that changed without a passing check. The check runs through ratchet's own
-  runner, which writes the receipt, so a pass cannot be *asserted* — only a real
-  zero exit clears the gate. Change detection scans the filesystem, not tool
-  events, so an edit made through Bash counts the same as one made through Edit.
+  code Claude changed without a passing check. A pass is recorded by a hook from
+  the shell call's own exit code when Claude runs the profile's Test command, so
+  it cannot be *asserted* — only a real zero exit clears the gate. A pipe, `;`
+  or `||` after the check hides that exit code, so such runs record nothing.
+  Checks the profile can't name go through `verify_run.py --command "<check>"`.
+- **What counts as a change** — files Claude wrote with Write, Edit or
+  NotebookEdit, and files written during one of its own Bash or PowerShell
+  calls, so `sed -i` counts the same as Edit. Files a clone, a checkout, a
+  program or your editor produced do not. Neither do prose, dotfiles
+  (`.gitignore`, `.env.example`), `*.example`, `*.session`, or extensionless
+  files without a shebang (UCI config). TOML, YAML, JSON and HTML do count.
 - **File-size warning** (`PostToolUse`) — flags files over a line budget
   (default 400, `RATCHET_FILE_SIZE_THRESHOLD` to change it).
 - **Tool-call logging** (`PostToolUse`, async) — records Bash and PowerShell
   command shapes for `find-patterns` to mine.
 
-State lives in the project's `.claude/framework/`, which carries its own
-`.gitignore` of `*`, so it never needs an ignore entry of your own.
+State lives under the plugin's data directory, `~/.claude/plugins/data/<id>/`,
+one event log per project. Nothing is written into your project, so
+`git clone <url> .` into a fresh folder works. Folders named
+`.claude/framework/` left by ratchet 0.2 are no longer used and can be deleted.
 
 **Guidance for the model** — skills it applies when they're relevant:
 
@@ -102,13 +111,18 @@ the same logic.
 **Two tiers of tests, because they catch different things.**
 
 ```bash
-python -B -m unittest discover -s plugin/scripts/tests -p "test_*.py"
-claude plugin eval
+PYTHONDONTWRITEBYTECODE=1 py -3 -m unittest discover -s plugin/scripts/tests -p "test_*.py"
+claude plugin eval plugin --tag gate --scaffold --allow-tools Write Edit --ablation none --model haiku
 ```
 
-`-B` keeps `__pycache__/` out of `plugin/` (the tests' own subprocesses set
-`PYTHONDONTWRITEBYTECODE`): the marketplace installs from this working tree,
-gitignored files included, so bytecode from a test run would ship.
+`PYTHONDONTWRITEBYTECODE` keeps `__pycache__/` out of `plugin/`, and unlike
+`-B` it reaches the hook scripts the tests run as subprocesses.
+
+The `gate` eval cases replay the 20 blocks the October 2026 config audit
+recorded: each case's description says which ones it stands for. The six
+false-alarm cases must not block and the four real catches must. Their graders
+are regexes, so the suite costs only the agent runs. Eval runs can't grant Bash
+on native Windows, so every edit in them goes through Write or Edit.
 
 Unit tests cover hook logic deterministically. Evals grade model behaviour. The
 eval tier cannot catch a hook that mangles its own input, and the unit tier
@@ -117,9 +131,8 @@ both classes of bug have shipped here, and each was caught by the tier the other
 one missed.
 
 **The gate is escapable on purpose.** It stands down after two nudges rather than
-trapping a session that genuinely cannot satisfy it, ignores prose files and
-ratchet's own bookkeeping, and only ever considers work done since the session
-started. Its job is to make skipping verification a deliberate act, not an
+trapping a session that genuinely cannot satisfy it, ignores files that aren't
+code, and only ever considers what Claude changed in the current session. Its job is to make skipping verification a deliberate act, not an
 impossible one.
 
 ## Local development

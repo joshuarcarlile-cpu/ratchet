@@ -18,9 +18,9 @@
 <!-- appended to by the log-fix skill -->
 - Hooks execute from the installed plugin cache, never from this repo. Editing
   a hook here changes nothing until `scripts/sync-plugin.ps1` runs. See CLAUDE.md.
-- The check command must be valid **cmd.exe**: `verify_run.py` runs it with
-  `shell=True`, so PowerShell-only syntax (`$env:X=1; ...`) fails under the
-  `verify` skill. Keep it shell-portable.
+- Keep the Test command shell-portable: the gate counts it when it runs as
+  written in Bash or PowerShell, and `verify_run.py` (for unprofiled checks)
+  runs commands under **cmd.exe**, where `$env:X=1; ...` fails.
 - A test run drops `__pycache__` into `plugin/scripts/` (gitignored, harmless).
   To avoid it, set `PYTHONDONTWRITEBYTECODE=1` in the environment first — not
   `py -3 -B`: the suite runs hook scripts as subprocesses, which inherit the env
