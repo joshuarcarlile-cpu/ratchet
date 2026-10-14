@@ -79,18 +79,13 @@ one event log per project. Nothing is written into your project, so
 .\install.ps1         # Windows
 ```
 
-Either one verifies the hooks work on your machine before registering anything —
-a hook that mangles its own input is worse than no hook. Then:
-
-```
-/plugin install ratchet
-```
-
-Or skip the installer and use the marketplace directly:
+Either one runs the hook tests on your machine and validates the manifest — a
+hook that mangles its own input is worse than no hook. It registers nothing.
+Then install from GitHub:
 
 ```
 /plugin marketplace add joshuarcarlile-cpu/ratchet
-/plugin install ratchet
+/plugin install ratchet@ratchet-marketplace
 ```
 
 Run `/project-profile` once per project so the gate knows your check command.
@@ -141,14 +136,12 @@ impossible one.
 claude --plugin-dir ./plugin
 ```
 
-Then `/reload-plugins` after editing any skill, hook, or agent file.
+It overrides the installed copy for that session only. Then `/reload-plugins`
+after editing any skill, hook, or agent file.
 
-To rehearse the real marketplace flow without pushing:
-
-```
-/plugin marketplace add /absolute/path/to/this/repo
-/plugin install ratchet
-```
+Don't register this folder as a marketplace to test it: a local folder source
+loads the working copy in place, so every session on the machine would run
+whatever is half-edited here.
 
 ## Credits
 

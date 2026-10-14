@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# Verify and register ratchet as a local Claude Code marketplace.
+# Verify that ratchet's hooks work on this machine, then say how to install it.
 #
-# Claude Code manages plugin installation itself, so this does not copy files
-# into a plugin directory. It does the part a plugin manager cannot: prove the
-# hook scripts actually work on this machine before you let them gate your work.
+# Claude Code installs ratchet itself, from the GitHub marketplace, so this
+# copies and registers nothing. It does the part a plugin manager cannot: prove
+# the hook scripts actually work here before you let them gate your work.
+#
+# It deliberately does not register this folder as a marketplace: a local
+# folder source loads the working copy in place, so an unfinished edit here
+# would reach every session on the machine.
 set -e
 
 echo "============================================================"
@@ -39,18 +43,14 @@ echo "-> Verifying hook logic..."
 if command -v claude >/dev/null 2>&1; then
     echo "-> Validating plugin manifest..."
     claude plugin validate "${REPO_DIR}/plugin"
-
-    echo "-> Registering local marketplace..."
-    claude plugin marketplace add "${REPO_DIR}"
 else
-    echo "-- claude CLI not found; skipping validation and registration."
+    echo "-- claude CLI not found; skipping manifest validation."
 fi
 
-chmod +x "${REPO_DIR}/plugin/bin/ratchet-hook.sh" 2>/dev/null || true
-
 echo ""
-echo "Done. To finish:"
-echo "  /plugin install ratchet"
+echo "Done. To install, in Claude Code:"
+echo "  /plugin marketplace add joshuarcarlile-cpu/ratchet"
+echo "  /plugin install ratchet@ratchet-marketplace"
 echo ""
 echo "Then run /project-profile once per project so the verification gate"
 echo "knows what your check command is."

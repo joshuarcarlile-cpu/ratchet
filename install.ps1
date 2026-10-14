@@ -1,10 +1,14 @@
 <#
 .SYNOPSIS
-    Verify and register ratchet as a local Claude Code marketplace.
+    Verify that ratchet's hooks work on this machine, then say how to install it.
 .DESCRIPTION
-    Claude Code manages plugin installation itself, so this does not copy files
-    into a plugin directory. It does the part a plugin manager cannot: prove the
-    hook scripts actually work on this machine before you let them gate your work.
+    Claude Code installs ratchet itself, from the GitHub marketplace, so this
+    copies and registers nothing. It does the part a plugin manager cannot: prove
+    the hook scripts actually work here before you let them gate your work.
+
+    It deliberately does not register this folder as a marketplace: a local
+    folder source loads the working copy in place, so an unfinished edit here
+    would reach every session on the machine.
 
     Written for Windows PowerShell 5.1 - no &&, no ternary, no null-coalescing.
 #>
@@ -80,11 +84,11 @@ $TestDir = Join-Path $RepoDir "plugin\scripts\tests"
 $testArgs = @($PyArgs) + @("-m", "unittest", "discover", "-s", $TestDir, "-p", "test_*.py", "-q")
 $testExit = Invoke-Native $PyExe $testArgs
 if ($testExit -ne 0) {
-    Write-Error "Hook tests failed. Not registering a plugin whose hooks are broken."
+    Write-Error "Hook tests failed. Don't install a plugin whose hooks are broken."
     exit 1
 }
 
-# 3. Validate and register, if the CLI is present.
+# 3. Validate the manifest, if the CLI is present.
 if (Get-Command claude -ErrorAction SilentlyContinue) {
     Write-Host "-> Validating plugin manifest..." -ForegroundColor Green
     $validateExit = Invoke-Native "claude" @("plugin", "validate", (Join-Path $RepoDir "plugin"))
@@ -92,16 +96,14 @@ if (Get-Command claude -ErrorAction SilentlyContinue) {
         Write-Error "Plugin manifest failed validation."
         exit 1
     }
-
-    Write-Host "-> Registering local marketplace..." -ForegroundColor Green
-    Invoke-Native "claude" @("plugin", "marketplace", "add", $RepoDir) | Out-Null
 } else {
-    Write-Host "-- claude CLI not found; skipping validation and registration." -ForegroundColor Yellow
+    Write-Host "-- claude CLI not found; skipping manifest validation." -ForegroundColor Yellow
 }
 
 Write-Host ""
-Write-Host "Done. To finish:" -ForegroundColor Cyan
-Write-Host "  /plugin install ratchet"
+Write-Host "Done. To install, in Claude Code:" -ForegroundColor Cyan
+Write-Host "  /plugin marketplace add joshuarcarlile-cpu/ratchet"
+Write-Host "  /plugin install ratchet@ratchet-marketplace"
 Write-Host ""
 Write-Host "Then run /project-profile once per project so the verification gate"
 Write-Host "knows what your check command is."
