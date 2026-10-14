@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: gate-rc-kotlin-new-test
+description: >-
+  Stands for 1 of the 20: SettingsNavigationTest.kt in chan-archiver, written with Write; the Gradle run after it was piped, so its exit code never counted. Must block.
+tags: [gate, real-catch]
+context:
+  scaffold_script: fixture.sh

@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: gate-fa-clone-wrangler
+description: >-
+  Stands for 2 of the 20: website/wrangler.toml in REA, produced by git fetch and checkout after the clone into `.` failed. The fixture gives the checked-out files future mtimes. Must not block.
+tags: [gate, false-alarm]
+context:
+  scaffold_script: fixture.sh

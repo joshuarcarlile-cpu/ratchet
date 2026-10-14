@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: gate-rc-shell-script
+description: >-
+  Stands for 3 of the 20: router_probes.sh (x1) and configure_pihole_blocklists.sh (x2, one a duplicate transcript) in network-stuff, edited after the last `bash -n` that went through ratchet. Must block.
+tags: [gate, real-catch]
+context:
+  scaffold_script: fixture.sh

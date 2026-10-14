@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: gate-fa-gitattributes
+description: >-
+  Stands for 3 of the 20: .gitattributes written with Write in ATfBooru, three turns. Must not block.
+tags: [gate, false-alarm]
+context:
+  scaffold_script: fixture.sh

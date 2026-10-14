@@ -1,0 +1,7 @@
+schema_version: "1.1"
+name: gate-fa-gitignore
+description: >-
+  Stands for 4 of the 20 recorded blocks: .gitignore edited with Edit in Duplicate check (x2) and network-stuff (x2). Must not block.
+tags: [gate, false-alarm]
+context:
+  scaffold_script: fixture.sh
