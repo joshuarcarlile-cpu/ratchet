@@ -24,6 +24,7 @@ sys.path.insert(0, SCRIPTS_DIR)
 
 import check_file_size  # noqa: E402
 import hook_io  # noqa: E402
+import log_tool_call  # noqa: E402
 
 
 def run_hook(script_name, event=None, env=None, cwd=None, raw=None):
@@ -213,6 +214,30 @@ class TestLogToolCall(unittest.TestCase):
                  env=self.env)
         record, _ = self.entries()[0]
         self.assertEqual(record["cmd"], "false")
+
+    def _fill(self, lines):
+        record = json.dumps({"ts": 1, "cmd": "x" * 120, "project": "p"}) + "\n"
+        with open(self.log, "w", encoding="utf-8") as handle:
+            handle.write(record * lines)
+        return len(record)
+
+    def test_log_is_trimmed_to_the_newest_lines_once_too_big(self):
+        """Every project shares the log and find-patterns reads only the recent
+        window, so past its size cap it keeps just the newest lines."""
+        line = len(json.dumps({"ts": 1, "cmd": "x" * 120, "project": "p"})) + 1
+        self._fill(log_tool_call.MAX_LOG_BYTES // line + 10)
+        run_hook("log_tool_call.py", {"tool_input": {"command": "newest"}},
+                 env=self.env)
+        entries = self.entries()
+        self.assertEqual(len(entries), log_tool_call.KEEP_LINES)
+        self.assertTrue(all(ok for _, ok in entries))
+        self.assertEqual(entries[-1][0]["cmd"], "newest")
+
+    def test_log_under_the_cap_is_left_alone(self):
+        self._fill(3)
+        run_hook("log_tool_call.py", {"tool_input": {"command": "newest"}},
+                 env=self.env)
+        self.assertEqual(len(self.entries()), 4)
 
     def test_without_plugin_data_nothing_is_written(self):
         run_hook("log_tool_call.py", {"tool_input": {"command": "ls"}},

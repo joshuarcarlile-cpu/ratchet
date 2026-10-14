@@ -26,6 +26,31 @@ import session_state  # noqa: E402
 
 MAX_COMMAND_LENGTH = 120
 
+# The log is shared by every project and find-patterns reads only its recent
+# window, so once it passes MAX_LOG_BYTES it keeps the newest KEEP_LINES lines.
+# At 120 characters a command, KEEP_LINES fits well under the cap.
+MAX_LOG_BYTES = 1_000_000
+KEEP_LINES = 2000
+
+
+def trim(path):
+    """Cut the log back to its newest lines once it outgrows its cap.
+
+    The rewrite can drop a line another hook appends at the same moment, which
+    for a pattern log costs nothing worth a lock.
+    """
+    try:
+        if os.path.getsize(path) <= MAX_LOG_BYTES:
+            return
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            lines = handle.readlines()[-KEEP_LINES:]
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            handle.writelines(lines)
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
 
 def main():
     event = hook_io.read_event()
@@ -43,6 +68,7 @@ def main():
             "cmd": command[:MAX_COMMAND_LENGTH],
             "project": project,
         })
+        trim(log)
         session_state.record_shell(command, event)
         outcome = checks.result(event, project)
         if outcome:
