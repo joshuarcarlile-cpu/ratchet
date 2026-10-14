@@ -4,7 +4,7 @@
 - Python 3: `plugin/scripts/*.py` (no marker file — this repo ships a Claude
   Code plugin, not a package, so there is no `pyproject.toml` to detect)
 - Bash: `plugin/bin/ratchet-hook.sh`, `install.sh`
-- PowerShell 5.1: `install.ps1`, `scripts/sync-plugin.ps1`
+- PowerShell 5.1: `install.ps1`
 
 ## Commands
 - Test: `py -3 -m unittest discover -s plugin/scripts/tests -p "test_*.py"`
@@ -12,12 +12,12 @@
 
 ## Conventions
 - Tests live in: `plugin/scripts/tests/`
-- Scripts live in: `scripts/` (developer tooling), `plugin/scripts/` (hook logic)
+- Scripts live in: `plugin/scripts/` (hook logic)
 
 ## Gotchas
 <!-- appended to by the log-fix skill -->
-- Hooks execute from the installed plugin cache, never from this repo. Editing
-  a hook here changes nothing until `scripts/sync-plugin.ps1` runs. See CLAUDE.md.
+- Hooks execute from the installed plugin cache, never from this repo. Test
+  the working copy with `claude --plugin-dir`; see CLAUDE.md.
 - Keep the Test command shell-portable: the gate counts it when it runs as
   written in Bash or PowerShell, and `verify_run.py` (for unprofiled checks)
   runs commands under **cmd.exe**, where `$env:X=1; ...` fails.

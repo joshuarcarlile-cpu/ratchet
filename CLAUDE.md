@@ -3,27 +3,25 @@
 Global rules in `~/.claude/CLAUDE.md` apply. This file records only what is
 specific to this repo and expensive to rediscover.
 
-## Hooks do not run from this repo
+## Developing and releasing
 
-Claude Code copies `plugin/` into the plugin cache at install time and executes
-everything from there. `CLAUDE_PLUGIN_ROOT` points at the cache:
+ratchet installs from the GitHub marketplace (`joshuarcarlile-cpu/ratchet`).
+Claude Code copies `plugin/` at the pinned version into
+`~/.claude/plugins/cache/ratchet-marketplace/ratchet/<version>/` and runs it
+from there, so an edit in this repo reaches no session until it is released.
 
-    ~/.claude/plugins/cache/ratchet-marketplace/ratchet/<version>/
+- **Test the working copy:** start a session with
+  `claude --plugin-dir C:\Users\joshu\Projects\ratchet\plugin`, which overrides
+  the installed copy for that session. Each hook firing re-reads its script,
+  so script edits are live on the next tool call; `hooks.json` is read once at
+  session start, so changing *which* hooks exist needs a new session.
+- **Release:** bump `version` in `plugin/.claude-plugin/plugin.json`, push
+  `master`, then run `claude plugin marketplace update ratchet-marketplace`
+  and `claude plugin update ratchet@ratchet-marketplace`. Sessions already
+  running keep the old hooks until they restart.
 
-Editing a hook script here has **no effect on a running session**. Push it live:
-
-```powershell
-.\scripts\sync-plugin.ps1
-```
-
-Each hook firing re-reads its script from disk, so synced changes under
-`scripts/` or `bin/` take effect on the next tool call — no restart. The
-exception is `hooks.json`, which the harness reads once at session start:
-changing *what* a hook does is live, changing *which* hooks exist is not.
-
-`installLocation` in `known_marketplaces.json` names this repo, which makes it
-look like hooks run from here. They do not — that field is the marketplace
-source, not the execution root. Verified by probe, not inference.
+Never copy the working tree into the cache: that rewrites a pinned release in
+place, so every session on the machine runs unreleased code.
 
 ## Testing
 
