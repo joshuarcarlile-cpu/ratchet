@@ -15,7 +15,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest import mock
 
 TEST_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPTS_DIR = os.path.normpath(os.path.join(TEST_DIR, ".."))
@@ -30,19 +29,20 @@ import hook_io  # noqa: E402
 def run_hook(script_name, event=None, env=None, cwd=None, raw=None):
     """Run a hook end to end the way Claude Code does: JSON on stdin.
 
-    Always hands the hook a throwaway project dir unless the caller names one.
-    Without it the hook falls back to the cwd and writes its state into the
-    source tree -- which is the very bug these tests exist to pin down.
+    Always hands the hook throwaway project and plugin-data dirs unless the
+    caller names them, so a test run never writes into the source tree or into
+    the real ~/.claude/plugins/data.
     """
     environment = dict(os.environ)
     environment.pop("CLAUDE_PLUGIN_ROOT", None)
     # As ratchet-hook.sh does: no __pycache__/ in plugin/, which gets installed.
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
 
-    scratch = None
-    if not (env or {}).get("CLAUDE_PROJECT_DIR"):
-        scratch = tempfile.TemporaryDirectory()
-        environment["CLAUDE_PROJECT_DIR"] = scratch.name
+    scratch = []
+    for key in ("CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_DATA"):
+        if not (env or {}).get(key):
+            scratch.append(tempfile.TemporaryDirectory())
+            environment[key] = scratch[-1].name
     if env:
         environment.update(env)
 
@@ -52,12 +52,13 @@ def run_hook(script_name, event=None, env=None, cwd=None, raw=None):
             input=raw if raw is not None else json.dumps(event or {}),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             env=environment,
             cwd=cwd,
         )
     finally:
-        if scratch is not None:
-            scratch.cleanup()
+        for directory in scratch:
+            directory.cleanup()
 
 
 class TestEventParsing(unittest.TestCase):
@@ -110,7 +111,8 @@ class TestProjectDirAnchoring(unittest.TestCase):
     def setUp(self):
         self._saved = {
             key: os.environ.pop(key, None)
-            for key in ("CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT")
+            for key in ("CLAUDE_PROJECT_DIR", "CLAUDE_PLUGIN_ROOT",
+                        "CLAUDE_PLUGIN_DATA")
         }
 
     def tearDown(self):
@@ -132,97 +134,91 @@ class TestProjectDirAnchoring(unittest.TestCase):
             hook_io.project_dir({"cwd": "/from/event"}), "/from/event"
         )
 
-    def test_framework_dir_is_under_project_dir(self):
+    def test_data_dir_comes_from_the_environment(self):
+        self.assertIsNone(hook_io.data_dir())
         with tempfile.TemporaryDirectory() as tmp:
-            os.environ["CLAUDE_PROJECT_DIR"] = tmp
-            self.assertEqual(
-                hook_io.framework_dir(),
-                os.path.join(tmp, ".claude", "framework"),
-            )
+            os.environ["CLAUDE_PLUGIN_DATA"] = tmp
+            try:
+                self.assertEqual(hook_io.data_dir(), tmp)
+            finally:
+                os.environ.pop("CLAUDE_PLUGIN_DATA")
 
 
 class TestLogToolCall(unittest.TestCase):
+    def setUp(self):
+        self._project = tempfile.TemporaryDirectory()
+        self._data = tempfile.TemporaryDirectory()
+        self.env = {"CLAUDE_PROJECT_DIR": self._project.name,
+                    "CLAUDE_PLUGIN_DATA": self._data.name}
+        self.log = os.path.join(self._data.name, "tool-log.jsonl")
+
+    def tearDown(self):
+        self._project.cleanup()
+        self._data.cleanup()
+
+    def entries(self):
+        return hook_io.read_jsonl(self.log)
+
     def test_quoted_command_round_trips_through_the_log(self):
         """End to end: the log must read back byte-identical to what went in."""
         command = 'cd "C:/Program Files/x" && echo "done"'
-        with tempfile.TemporaryDirectory() as tmp:
-            run_hook(
-                "log_tool_call.py",
-                {"tool_input": {"command": command}},
-                env={"CLAUDE_PROJECT_DIR": tmp},
-            )
-            log = os.path.join(tmp, ".claude", "framework", "tool-log.jsonl")
-            self.assertTrue(os.path.isfile(log), "hook wrote no log")
-            entries = hook_io.read_jsonl(log)
-            self.assertEqual(len(entries), 1)
-            record, ok = entries[0]
-            self.assertTrue(ok, f"log line did not parse: {record!r}")
-            self.assertEqual(record["cmd"], command)
+        run_hook("log_tool_call.py", {"tool_input": {"command": command}},
+                 env=self.env)
+        self.assertTrue(os.path.isfile(self.log), "hook wrote no log")
+        entries = self.entries()
+        self.assertEqual(len(entries), 1)
+        record, ok = entries[0]
+        self.assertTrue(ok, f"log line did not parse: {record!r}")
+        self.assertEqual(record["cmd"], command)
+        self.assertEqual(record["project"], self._project.name)
 
-    def test_log_is_written_under_project_dir_not_cwd(self):
-        """Bug 1: the hook must not write into whatever directory it runs in."""
-        with tempfile.TemporaryDirectory() as project, \
-                tempfile.TemporaryDirectory() as elsewhere:
-            run_hook(
-                "log_tool_call.py",
-                {"tool_input": {"command": "ls"}},
-                env={"CLAUDE_PROJECT_DIR": project},
-                cwd=elsewhere,
-            )
-            self.assertTrue(
-                os.path.isfile(
-                    os.path.join(project, ".claude", "framework", "tool-log.jsonl")
-                )
-            )
-            self.assertFalse(
-                os.path.exists(os.path.join(elsewhere, ".claude")),
-                "hook wrote a stray .claude tree into its working directory",
-            )
+    def test_log_is_written_under_plugin_data_only(self):
+        """Neither the shell's cwd nor the project gets a stray .claude tree."""
+        with tempfile.TemporaryDirectory() as elsewhere:
+            run_hook("log_tool_call.py", {"tool_input": {"command": "ls"}},
+                     env=self.env, cwd=elsewhere)
+            self.assertTrue(os.path.isfile(self.log))
+            self.assertEqual(os.listdir(elsewhere), [])
+        self.assertEqual(os.listdir(self._project.name), [])
 
     def test_long_command_is_truncated(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            run_hook(
-                "log_tool_call.py",
-                {"tool_input": {"command": "x" * 500}},
-                env={"CLAUDE_PROJECT_DIR": tmp},
-            )
-            log = os.path.join(tmp, ".claude", "framework", "tool-log.jsonl")
-            record, _ = hook_io.read_jsonl(log)[0]
-            self.assertEqual(len(record["cmd"]), 120)
+        run_hook("log_tool_call.py", {"tool_input": {"command": "x" * 500}},
+                 env=self.env)
+        record, _ = self.entries()[0]
+        self.assertEqual(len(record["cmd"]), 120)
 
     def test_no_command_writes_no_log_entry(self):
-        """An event with no command logs nothing.
-
-        The session-state file may still appear: the hook marks the session
-        baseline before it looks for a command, which is deliberate.
-        """
-        with tempfile.TemporaryDirectory() as tmp:
-            run_hook(
-                "log_tool_call.py",
-                {"tool_input": {"file_path": "a.txt"}},
-                env={"CLAUDE_PROJECT_DIR": tmp},
-            )
-            log = os.path.join(tmp, ".claude", "framework", "tool-log.jsonl")
-            self.assertFalse(os.path.exists(log))
+        run_hook("log_tool_call.py", {"tool_input": {"file_path": "a.txt"}},
+                 env=self.env)
+        self.assertFalse(os.path.exists(self.log))
 
     def test_hook_exits_zero_on_garbage_input(self):
         proc = run_hook("log_tool_call.py", raw="not json at all")
         self.assertEqual(proc.returncode, 0, proc.stderr)
 
     def test_powershell_command_is_logged(self):
-        """The PowerShell tool sends the same `command` field as Bash, so the
-        script needs no change once hooks.json routes PowerShell to it."""
-        with tempfile.TemporaryDirectory() as tmp:
-            run_hook(
-                "log_tool_call.py",
-                {"tool_name": "PowerShell",
-                 "tool_input": {"command": "Get-ChildItem -LiteralPath $p"}},
-                env={"CLAUDE_PROJECT_DIR": tmp},
-            )
-            log = os.path.join(tmp, ".claude", "framework", "tool-log.jsonl")
-            record, ok = hook_io.read_jsonl(log)[0]
-            self.assertTrue(ok)
-            self.assertEqual(record["cmd"], "Get-ChildItem -LiteralPath $p")
+        """The PowerShell tool sends the same `command` field as Bash."""
+        run_hook("log_tool_call.py",
+                 {"tool_name": "PowerShell",
+                  "tool_input": {"command": "Get-ChildItem -LiteralPath $p"}},
+                 env=self.env)
+        record, ok = self.entries()[0]
+        self.assertTrue(ok)
+        self.assertEqual(record["cmd"], "Get-ChildItem -LiteralPath $p")
+
+    def test_failed_command_is_logged_too(self):
+        run_hook("log_tool_call.py",
+                 {"hook_event_name": "PostToolUseFailure",
+                  "tool_input": {"command": "false"}, "error": "Exit code 1"},
+                 env=self.env)
+        record, _ = self.entries()[0]
+        self.assertEqual(record["cmd"], "false")
+
+    def test_without_plugin_data_nothing_is_written(self):
+        run_hook("log_tool_call.py", {"tool_input": {"command": "ls"}},
+                 env={"CLAUDE_PROJECT_DIR": self._project.name,
+                      "CLAUDE_PLUGIN_DATA": ""})
+        self.assertEqual(os.listdir(self._project.name), [])
 
 
 class TestReadJsonl(unittest.TestCase):
@@ -318,35 +314,57 @@ class TestCheckFileSize(unittest.TestCase):
 class TestHooksManifest(unittest.TestCase):
     """hooks.json fails silently: a matcher that misses a tool never fires."""
 
-    def _only(self, event_name, script_name):
-        """(matcher, hook) for the single hooks.json entry running a script."""
+    def _manifest(self):
         path = os.path.join(PLUGIN_DIR, "hooks", "hooks.json")
         with open(path, "r", encoding="utf-8") as handle:
-            manifest = json.load(handle)
-        found = [
+            return json.load(handle)
+
+    def _entries(self, event_name, script_name):
+        """(matcher, hook) for each hooks.json entry running a script."""
+        return [
             (group.get("matcher", ""), hook)
-            for group in manifest["hooks"].get(event_name, [])
+            for group in self._manifest()["hooks"].get(event_name, [])
             for hook in group.get("hooks", [])
             if script_name in hook.get("command", "")
         ]
+
+    def _only(self, event_name, script_name):
+        found = self._entries(event_name, script_name)
         self.assertEqual(len(found), 1, f"{script_name} under {event_name}")
         return found[0]
 
-    def test_logger_hears_bash_and_powershell(self):
-        """A `Bash`-only matcher never fires for the PowerShell tool, so a
-        session that only ran PowerShell logged nothing and never set the
-        gate's session baseline."""
-        matcher, _ = self._only("PostToolUse", "log_tool_call.py")
-        for tool in ("Bash", "PowerShell"):
-            self.assertTrue(
-                re.fullmatch(matcher, tool),
-                f"logger matcher {matcher!r} misses {tool}",
-            )
+    def test_logger_hears_bash_and_powershell_success_and_failure(self):
+        """A `Bash`-only matcher never fires for the PowerShell tool, and a
+        failing check only ever reaches PostToolUseFailure."""
+        for event_name in ("PostToolUse", "PostToolUseFailure"):
+            matcher, _ = self._only(event_name, "log_tool_call.py")
+            for tool in ("Bash", "PowerShell"):
+                with self.subTest(event=event_name, tool=tool):
+                    self.assertTrue(re.fullmatch(matcher, tool),
+                                    f"logger matcher {matcher!r} misses {tool}")
+
+    def test_edit_recorder_hears_every_file_tool(self):
+        matcher, _ = self._only("PostToolUse", "check_file_size.py")
+        for tool in ("Write", "Edit", "NotebookEdit"):
+            with self.subTest(tool=tool):
+                self.assertTrue(re.fullmatch(matcher, tool))
+
+    def test_every_hook_is_handed_the_plugin_data_dir(self):
+        """Claude Code exports CLAUDE_PLUGIN_DATA to hooks only once a hook
+        command references it (seen in 2.1.296 eval runs). Without it the gate
+        has nowhere to keep state and switches itself off."""
+        for event_name, groups in self._manifest()["hooks"].items():
+            for group in groups:
+                for hook in group["hooks"]:
+                    with self.subTest(event=event_name, command=hook["command"]):
+                        self.assertIn('CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}"',
+                                      hook["command"])
 
     def test_logger_runs_async(self):
-        """The logger decides nothing, so no tool call should wait on it."""
-        _, hook = self._only("PostToolUse", "log_tool_call.py")
-        self.assertIs(hook.get("async"), True)
+        """The logger only records; no tool call should wait on it."""
+        for event_name in ("PostToolUse", "PostToolUseFailure"):
+            _, hook = self._only(event_name, "log_tool_call.py")
+            self.assertIs(hook.get("async"), True, event_name)
 
     def test_steering_hooks_stay_synchronous(self):
         """The size warning and the Stop gate talk back to Claude. An async
@@ -359,78 +377,63 @@ class TestHooksManifest(unittest.TestCase):
             self.assertFalse(hook.get("async", False), script)
 
 
-class TestFrameworkIgnoresItself(unittest.TestCase):
-    """`.claude/framework/` is local state; it must never show up in git.
+class TestNotebookEdit(unittest.TestCase):
+    def test_notebook_edit_arms_the_gate(self):
+        with tempfile.TemporaryDirectory() as project,                 tempfile.TemporaryDirectory() as data:
+            notebook = os.path.join(project, "analysis.ipynb")
+            with open(notebook, "w", encoding="utf-8") as handle:
+                handle.write("{}")
+            env = {"CLAUDE_PROJECT_DIR": project, "CLAUDE_PLUGIN_DATA": data}
+            run_hook("check_file_size.py",
+                     {"session_id": "s1", "tool_name": "NotebookEdit",
+                      "tool_input": {"notebook_path": notebook}}, env=env)
+            stop = run_hook("require_verification.py", {"session_id": "s1"},
+                            env=env)
+            self.assertIn('"decision"', stop.stdout)
+            self.assertIn("analysis.ipynb", stop.stdout)
 
-    Like `.pytest_cache`, the folder carries its own `.gitignore` of `*`, so a
-    project needs no ignore entry of its own.
+
+@unittest.skipIf(shutil.which("git") is None, "git not on PATH")
+class TestHooksLeaveTheProjectAlone(unittest.TestCase):
+    """0.2.1 kept its state in `<project>/.claude/framework/`. Now that state
+    lives under the plugin's data dir, git must see no new files at all, with
+    no ignore file anywhere to hide them.
+
+    Git runs with an empty global config and no system config, so a personal
+    excludes file cannot make this pass by accident.
     """
 
-    def setUp(self):
-        self._saved = os.environ.pop("CLAUDE_PROJECT_DIR", None)
-        self._tmp = tempfile.TemporaryDirectory()
-        os.environ["CLAUDE_PROJECT_DIR"] = self._tmp.name
-        self.marker = os.path.join(
-            self._tmp.name, ".claude", "framework", ".gitignore"
-        )
+    def test_git_status_is_clean_after_every_hook_ran(self):
+        with tempfile.TemporaryDirectory() as project,                 tempfile.TemporaryDirectory() as data:
+            empty = os.path.join(data, "empty.gitconfig")
+            open(empty, "w").close()
+            git_env = dict(os.environ, GIT_CONFIG_GLOBAL=empty,
+                           GIT_CONFIG_NOSYSTEM="1")
 
-    def tearDown(self):
-        self._tmp.cleanup()
-        if self._saved is None:
-            os.environ.pop("CLAUDE_PROJECT_DIR", None)
-        else:
-            os.environ["CLAUDE_PROJECT_DIR"] = self._saved
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=project, env=git_env,
+                                      capture_output=True, text=True)
 
-    def test_created_folder_ignores_itself(self):
-        hook_io.framework_dir(create=True)
-        with open(self.marker, "r", encoding="utf-8") as handle:
-            lines = [line.strip() for line in handle]
-        self.assertIn("*", lines)
+            self.assertEqual(git("init", "-q").returncode, 0)
+            code = os.path.join(project, "app.py")
+            open(code, "w").close()
+            git("add", "-A")
+            git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "i")
 
-    def test_existing_gitignore_is_kept(self):
-        os.makedirs(os.path.dirname(self.marker))
-        with open(self.marker, "w", encoding="utf-8") as handle:
-            handle.write("tool-log.jsonl\n")
-        hook_io.framework_dir(create=True)
-        with open(self.marker, "r", encoding="utf-8") as handle:
-            self.assertEqual(handle.read(), "tool-log.jsonl\n")
+            env = {"CLAUDE_PROJECT_DIR": project, "CLAUDE_PLUGIN_DATA": data}
+            for script, event in (
+                ("log_tool_call.py", {"tool_input": {"command": "ls"}}),
+                ("check_file_size.py", {"tool_name": "Edit",
+                                        "tool_input": {"file_path": code}}),
+                ("require_verification.py", {}),
+            ):
+                event = dict(event, session_id="s1")
+                proc = run_hook(script, event, env=env)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
 
-    def test_gitignore_write_failure_is_swallowed(self):
-        """Failing to write the marker must not cost the hook its real work."""
-        with mock.patch("hook_io.open", side_effect=PermissionError,
-                        create=True):
-            path = hook_io.framework_dir(create=True)
-        self.assertTrue(os.path.isdir(path))
-
-    @unittest.skipIf(shutil.which("git") is None, "git not on PATH")
-    def test_hook_state_is_ignored_by_git(self):
-        """End to end: after the hooks run, git sees nothing in the folder.
-
-        Git runs with an empty global config and no system config, so a
-        personal excludes file cannot make this pass by accident.
-        """
-        project = self._tmp.name
-        empty = os.path.join(project, "empty.gitconfig")
-        open(empty, "w").close()
-        git_env = dict(os.environ, GIT_CONFIG_GLOBAL=empty,
-                       GIT_CONFIG_NOSYSTEM="1")
-
-        def git(*args):
-            return subprocess.run(["git", *args], cwd=project, env=git_env,
-                                  capture_output=True, text=True)
-
-        self.assertEqual(git("init", "-q").returncode, 0)
-        run_hook("log_tool_call.py",
-                 {"session_id": "s1", "tool_input": {"command": "ls"}},
-                 env={"CLAUDE_PROJECT_DIR": project})
-
-        for name in ("tool-log.jsonl", "session-state.json"):
-            rel = f".claude/framework/{name}"
-            self.assertTrue(os.path.isfile(os.path.join(project, rel)), rel)
-            self.assertEqual(git("check-ignore", "-q", rel).returncode, 0,
-                             f"git does not ignore {rel}")
-        status = git("status", "--porcelain", "--untracked-files=all").stdout
-        self.assertNotIn(".claude", status)
+            status = git("status", "--porcelain", "--untracked-files=all",
+                         "--ignored").stdout
+            self.assertEqual(status, "")
 
 
 if __name__ == "__main__":
