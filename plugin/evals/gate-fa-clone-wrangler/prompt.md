@@ -1,5 +1,6 @@
 ---
 max_turns: 8
+model: claude-haiku-5-5
 allowed_tools: [Read, Glob, Grep, Edit, Write]
 ---
 

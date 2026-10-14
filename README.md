@@ -107,7 +107,7 @@ the same logic.
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 py -3 -m unittest discover -s plugin/scripts/tests -p "test_*.py"
-claude plugin eval plugin --tag gate --scaffold --allow-tools Write Edit --ablation none --model haiku
+claude plugin eval plugin --scaffold --allow-tools Write Edit --ablation none
 ```
 
 `PYTHONDONTWRITEBYTECODE` keeps `__pycache__/` out of `plugin/`, and unlike
@@ -118,6 +118,12 @@ recorded: each case's description says which ones it stands for. The six
 false-alarm cases must not block and the four real catches must. Their graders
 are regexes, so the suite costs only the agent runs. Eval runs can't grant Bash
 on native Windows, so every edit in them goes through Write or Edit.
+
+Each case pins its model: the `gate` cases run on Haiku, because the hook
+decides those and the model only makes an edit; the skill cases run on Sonnet,
+because Haiku never invokes plan-first or minimalism, with or without this
+plugin. Passing `--model` overrides every pin. Add `--tag gate` to run the gate
+cases alone.
 
 Unit tests cover hook logic deterministically. Evals grade model behaviour. The
 eval tier cannot catch a hook that mangles its own input, and the unit tier
