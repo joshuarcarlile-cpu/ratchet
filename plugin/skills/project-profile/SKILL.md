@@ -37,4 +37,5 @@ description: Detects the host project's language, test runner, lint/build comman
    <!-- appended to by the log-fix skill -->
    ```
 
-5. Keep the whole file under ~40 lines. Every other skill and the `regression-writer` subagent reads it, so it has to stay cheap to load — don't pad it with explanations.
+5. Record exactly one command in backticks on the Test line, the one that runs the whole suite. The verification gate counts that command as the check when it runs as written, in Bash or PowerShell.
+6. Keep the whole file under ~40 lines. Every other skill and the `regression-writer` subagent reads it, so it has to stay cheap to load — don't pad it with explanations.

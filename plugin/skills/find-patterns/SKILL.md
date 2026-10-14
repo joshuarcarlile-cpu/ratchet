@@ -1,10 +1,10 @@
 ---
-description: Reviews .claude/framework/tool-log.jsonl for command sequences repeated often enough to be worth turning into a script. Use on request, or periodically in long sessions.
+description: Reviews ratchet's log of recent shell commands for sequences repeated often enough to be worth turning into a script. Use on request, or periodically in long sessions.
 ---
 
 # Find Patterns
 
-1. Read `.claude/framework/tool-log.jsonl` (one JSON object per line: `{ts, cmd}`). If it doesn't exist, there's nothing to do.
+1. Find the log. If the user named a log file, read that file, relative to the working directory. Only if they didn't, read `${CLAUDE_PLUGIN_DATA}/tool-log.jsonl` and use the lines whose `project` is this project's root. Each line is one JSON object with a `cmd` field. If there's no log, there's nothing to do.
 2. Normalize each `cmd` by stripping literal arguments that vary (specific file paths, numbers, timestamps) to get a command "shape."
 3. Group by shape and count occurrences in the recent window (e.g. last 50 entries).
 4. For any shape repeated 3 or more times, propose turning it into a script:

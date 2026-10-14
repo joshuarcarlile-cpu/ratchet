@@ -4,13 +4,9 @@ description: Enforces explore-plan-review-implement-verify discipline for any no
 
 # Plan First
 
-1. Read `.claude/PROJECT_PROFILE.md`. If it's missing, run the `project-profile` skill first.
-2. Explore the relevant code read-only. Do not edit yet.
-3. Write a short plan covering: what changes, which files, and — mandatory — what check proves it worked (a test, build, or screenshot command, drawn from the profile's commands).
-4. Present the plan and explicitly wait for the user's go-ahead before writing any code. Do not treat silence, a vague reply, or an unrelated follow-up question as approval.
-5. Implement the change, then run the verification check named in step 3 and show its actual output — not just "done" or "should work now."
-6. If the check fails, keep iterating. Never report a change as complete while the check is failing or hasn't been run.
+1. Read `.claude/PROJECT_PROFILE.md` (run `project-profile` first if it's missing) and the code the change touches. Don't edit yet.
+2. Write a short plan: what changes, in which files, and the check that will prove it worked, drawn from the profile's commands.
+3. Present the plan and wait for the user's go-ahead before writing code. Silence, a vague reply or an unrelated question is not approval. The one exception is a request that says outright not to wait for approval, as an unattended `claude -p` job may: then put the plan in your reply first, and proceed.
+4. Implement, then run the check with the `verify` skill and show its real output. If it fails, fix and re-run, but stop after 2 consecutive failures with the same error or 4 runs in all, and report what fails and what you tried. Never call a change complete while its check is failing or hasn't run.
 
-Skip this whole flow for genuinely trivial changes (a typo, a log line, a one-line rename) where the diff could be described in a single sentence — planning overhead isn't worth it there.
-
-This applies whether or not interactive plan mode is toggled on, including in headless (`-p`) runs, since there's no user available mid-run to catch a skipped step.
+This applies whether or not plan mode is on. Skip it for genuinely trivial changes (a typo, a log line, a one-line rename) whose diff fits in one sentence.
