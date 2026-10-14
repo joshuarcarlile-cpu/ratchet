@@ -2,22 +2,30 @@
   "hooks": {
     "PostToolUse": [
       {
-        "matcher": "Write|Edit",
+        "matcher": "Write|Edit|NotebookEdit",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" check_file_size.py" }
+          { "type": "command", "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" \"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" check_file_size.py" }
         ]
       },
       {
         "matcher": "Bash|PowerShell",
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" log_tool_call.py", "async": true }
+          { "type": "command", "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" \"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" log_tool_call.py", "async": true }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          { "type": "command", "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" \"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" log_tool_call.py", "async": true }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" require_verification.py" }
+          { "type": "command", "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" \"${CLAUDE_PLUGIN_ROOT}/bin/ratchet-hook.sh\" require_verification.py" }
         ]
       }
     ]

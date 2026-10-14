@@ -1,139 +1,73 @@
 #!/usr/bin/env python3
-"""Ratchet's session state: what was edited, and what was verified.
+"""Ratchet's session record: what Claude changed, and what was verified.
 
-This is the file that lets a stateless hook answer "did this work get checked?".
-Two facts, and a timestamp comparison between them:
+This is what lets a stateless hook answer "did this work get checked?". Every
+hook appends events to one log per project, under ${CLAUDE_PLUGIN_DATA}:
 
-    the filesystem   scanned at Stop for the newest changed code file
-    last_verification  written by verify_run.py, and only ever by a command
-                       that actually exited 0
+    edit   a code file Claude wrote with Write, Edit or NotebookEdit
+    shell  the time window of one of Claude's Bash or PowerShell calls
+    check  a check command that ran, and its exit code
+    block  the Stop hook refused to end a turn
 
-A verification counts only if it is *newer* than the newest change. Editing
-after a green test run re-arms the gate, which is what makes this a ratchet
-rather than a checkbox.
+At Stop, a code file counts as changed if Claude edited it this session, or if
+its mtime falls inside one of this session's shell windows: an edit made with
+`sed -i` or a script fires no Write|Edit hook, and a gate you can step around
+by picking a different tool is not a gate. Files that changed some other way
+(a clone, a checkout, a program, the user's editor) are not Claude's work and
+do not count. That was most of the false alarms in 0.2.1, which judged every
+file newer than the session start.
 
-The change signal is the filesystem rather than the tool log, because an edit
-made through Bash (`printf >> app.py`, `sed -i`, a heredoc) never fires a
-Write|Edit hook. A gate you can step around by picking a different tool is
-not a gate. `last_edit` is still recorded, but only to enrich the message.
+The latest check decides. If it passed after the newest change, the work is
+verified; editing after a green run re-arms the gate, which is what makes this
+a ratchet rather than a checkbox.
 
-Scope is the project, not the session. State lives in the project's own
-`.claude/framework/`, and matching is by timestamp rather than session id.
-Two concurrent sessions in one project can therefore satisfy each other's gate —
-an accepted trade, because the alternative (strict session matching) blocks real
-work whenever a session id fails to thread through, and a false block is far
-more costly than a missed nudge.
+The log is append-only because hooks run concurrently: the shell logger is
+async, and Claude often makes several tool calls at once. Read-modify-write on
+one state file loses updates under that; appending a line does not.
 """
 
 import json
 import os
+import re
 import subprocess
 import time
 
 import hook_io
 
-STATE_FILENAME = "session-state.json"
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
-# Editing prose should not demand a test run. Anything not listed here counts as
-# code; erring toward "this needs verifying" is the safer default for a gate.
-NON_CODE_SUFFIXES = {".md", ".txt", ".rst", ".adoc", ".log"}
+# Editing prose or a config file Claude Code and git read should not demand a
+# test run. Anything not excluded here counts as code, TOML, YAML, JSON and
+# HTML included: erring toward "this needs verifying" is the safer default.
+NON_CODE_SUFFIXES = {".md", ".txt", ".rst", ".adoc", ".log", ".example", ".session"}
+
+# Extensionless files are code only when they are scripts (a shebang) or one
+# of these. Extensionless config, such as OpenWrt's UCI files, is not.
+BUILD_FILES = {"Makefile", "GNUmakefile", "Dockerfile", "Containerfile", "Jenkinsfile"}
 
 # A Stop hook that cannot be satisfied traps the user in a loop. After this many
 # consecutive blocks on the same batch of unverified edits, let the turn end.
 MAX_CONSECUTIVE_BLOCKS = 2
 
+# Seconds either side of a shell window, for mtime granularity and the gap
+# between a command ending and its hook running.
+WINDOW_SLACK = 1.0
 
-def state_path(event=None):
-    return os.path.join(hook_io.framework_dir(event), STATE_FILENAME)
+# duration_ms is optional in the hook input. Without it, reach back as far as
+# a foreground shell call can run: the Bash tool's maximum timeout.
+MAX_SHELL_SECONDS = 600
 
+# Other sessions' events older than this are dropped when the log is read.
+PRUNE_AFTER_SECONDS = 24 * 3600
 
-def load(event=None):
-    """Read state, degrading to an empty record rather than raising.
-
-    A corrupt state file must not break every subsequent tool call, so an
-    unreadable one is treated as absent and will be overwritten on next write.
-    """
-    try:
-        with open(state_path(event), "r", encoding="utf-8") as handle:
-            state = json.load(handle)
-    except (OSError, ValueError):
-        return {"version": SCHEMA_VERSION}
-    if not isinstance(state, dict):
-        return {"version": SCHEMA_VERSION}
-    return state
-
-
-def save(state, event=None):
-    hook_io.framework_dir(event, create=True)
-    path = state_path(event)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
-        json.dump(state, handle, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
-
-
-def is_code(path):
-    """Whether editing this path should arm the verification gate."""
-    if not path:
-        return False
-    normalised = path.replace("\\", "/")
-    # Ratchet's own bookkeeping is not the user's work.
-    if "/.claude/" in normalised or normalised.startswith(".claude/"):
-        return False
-    return os.path.splitext(normalised)[1].lower() not in NON_CODE_SUFFIXES
-
-
-def record_edit(path, event=None, now=None):
-    """Note that a source file changed. Re-arms the gate."""
-    if not is_code(path):
-        return False
-    state = load(event)
-    previous = state.get("last_edit") or {}
-    state["last_edit"] = {
-        "ts": now if now is not None else time.time(),
-        "file": path,
-        "count": int(previous.get("count", 0)) + 1,
-    }
-    # New work means the previous round of nudging is spent.
-    state["consecutive_blocks"] = 0
-    save(state, event)
-    return True
-
-
-def touch_session(event=None, now=None):
-    """Mark the start of a session, once.
-
-    The filesystem scan needs a baseline: without one, every pre-existing file
-    in the project looks like unverified work and a session that edited nothing
-    would still be blocked. The first ratchet hook to see a new session id sets
-    the mark; everything older than it is somebody else's problem.
-    """
-    session = (event or {}).get("session_id")
-    state = load(event)
-    if session and state.get("session_id") == session:
-        return state
-    state["session_id"] = session
-    state["session_start"] = now if now is not None else time.time()
-    state["consecutive_blocks"] = 0
-    save(state, event)
-    return state
-
-
-def record_verification(command, exit_code, event=None, session=None, now=None):
-    """Note a check that actually ran. Only a zero exit clears the gate."""
-    state = load(event)
-    state["last_verification"] = {
-        "ts": now if now is not None else time.time(),
-        "command": command,
-        "exit": exit_code,
-        "session": session,
-    }
-    if exit_code == 0:
-        state["consecutive_blocks"] = 0
-    save(state, event)
-    return state
-
+# Shell commands that rewrite the working tree from git rather than from
+# Claude's hands. Files they produce are somebody else's code.
+_GIT_TREE = re.compile(
+    r"\bgit(?:\s+-[Cc]\s+\S+|\s+--?[\w-]+(?:=\S+)?)*\s+"
+    r"(?:clone|checkout|switch|pull|merge|rebase|reset|stash|restore|"
+    r"cherry-pick|revert|am|worktree|submodule)\b"
+    r"|\bgh\s+repo\s+clone\b"
+)
 
 # Directories that never hold the user's code but can hold thousands of files.
 PRUNE_DIRS = {
@@ -146,12 +80,128 @@ PRUNE_DIRS = {
 MAX_SCANNED_FILES = 20000
 
 
+def is_code(path, root=None):
+    """Whether a change to this path should arm the verification gate.
+
+    `root` resolves a relative path for the one rule that reads the file: an
+    extensionless file is code only if it starts with `#!`.
+    """
+    if not path:
+        return False
+    normalised = path.replace("\\", "/")
+    # Ratchet's own and Claude Code's bookkeeping is not the user's work.
+    if "/.claude/" in normalised or normalised.startswith(".claude/"):
+        return False
+    name = normalised.rsplit("/", 1)[-1]
+    # .gitignore, .gitattributes, .env.example, .editorconfig: tool config.
+    if name.startswith("."):
+        return False
+    suffix = os.path.splitext(name)[1].lower()
+    if suffix:
+        return suffix not in NON_CODE_SUFFIXES
+    if name in BUILD_FILES:
+        return True
+    full = path if root is None or os.path.isabs(path) else os.path.join(root, path)
+    try:
+        with open(full, "rb") as handle:
+            return handle.read(2) == b"#!"
+    except OSError:
+        return False
+
+
+def _inside(path, project):
+    project = os.path.normcase(os.path.abspath(project))
+    path = os.path.normcase(os.path.abspath(path))
+    return path == project or path.startswith(project.rstrip(os.sep) + os.sep)
+
+
+def _append(kind, event, now=None, **fields):
+    path = hook_io.event_log_path(event)
+    if path is None:
+        return False
+    record = {
+        "v": SCHEMA_VERSION,
+        "ts": now if now is not None else time.time(),
+        "session": (event or {}).get("session_id"),
+        "kind": kind,
+    }
+    record.update(fields)
+    hook_io.append_jsonl(path, record)
+    return True
+
+
+def record_edit(path, event=None, now=None):
+    """Claude changed a file with a file tool. Re-arms the gate if it is code
+    inside the project; scratch files elsewhere are not the user's work."""
+    project = hook_io.project_dir(event)
+    if not path or not _inside(path, project) or not is_code(path):
+        return False
+    return _append("edit", event, now, path=os.path.relpath(path, project))
+
+
+def record_shell(command, event=None, now=None):
+    """Claude ran a shell command. Files written during it are Claude's work,
+    unless the command was git rewriting the working tree."""
+    if not command or _GIT_TREE.search(command):
+        return False
+    end = now if now is not None else time.time()
+    try:
+        duration = float((event or {}).get("duration_ms")) / 1000.0
+    except (TypeError, ValueError):
+        duration = MAX_SHELL_SECONDS
+    return _append("shell", event, end, start=end - max(duration, 0.0))
+
+
+def record_check(command, exit_code, event=None, now=None):
+    """A check ran. Only a zero exit clears the gate."""
+    return _append("check", event, now, command=command, exit=exit_code)
+
+
+def _session_events(event, now=None):
+    """This session's events, oldest first. Prunes other sessions' stale ones."""
+    path = hook_io.event_log_path(event)
+    session = (event or {}).get("session_id")
+    if path is None or not session:
+        return []
+    records = [record for record, ok in hook_io.read_jsonl(path) if ok]
+    now = now if now is not None else time.time()
+    keep = [
+        r for r in records
+        if r.get("session") == session or _ts(r) >= now - PRUNE_AFTER_SECONDS
+    ]
+    if len(keep) < len(records):
+        _rewrite(path, keep)
+    mine = [r for r in keep if r.get("session") == session]
+    mine.sort(key=_ts)
+    return mine
+
+
+def _ts(record):
+    try:
+        return float(record.get("ts", 0))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _rewrite(path, records):
+    """Best-effort: a prune that fails leaves the old log, which still works."""
+    tmp = path + ".tmp"
+    try:
+        with open(tmp, "w", encoding="utf-8") as handle:
+            for record in records:
+                handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        os.replace(tmp, path)
+    except OSError:
+        pass
+
+
 def _git_files(project):
     """Tracked plus untracked-but-not-ignored files, or None if not a git repo."""
     try:
         result = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
-            cwd=project, capture_output=True, text=True, timeout=10,
+            cwd=project, capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=10,
         )
     except (OSError, subprocess.SubprocessError):
         return None
@@ -172,91 +222,76 @@ def _walked_files(project):
     return found
 
 
-def latest_code_change(event=None):
-    """(mtime, path) of the most recently modified code file, or None.
-
-    Reads the filesystem rather than trusting tool-call events, because the
-    route a file was edited by is not something a gate can afford to care
-    about. An edit made through Bash — `printf >> app.py`, `sed -i`, a heredoc —
-    never fires a Write|Edit hook, so a gate driven only by those events is
-    bypassed by the shell. This observes the result instead of the method.
-    """
-    project = hook_io.project_dir(event)
+def _shell_writes(project, windows, since):
+    """(mtime, path) of code files whose mtime falls in one of the windows."""
     names = _git_files(project)
     if names is None:
         names = _walked_files(project)
-
-    newest = None
+    found = []
     for name in names[:MAX_SCANNED_FILES]:
-        if not is_code(name):
-            continue
-        path = os.path.join(project, name)
         try:
-            mtime = os.path.getmtime(path)
+            mtime = os.path.getmtime(os.path.join(project, name))
         except OSError:
             continue
-        if newest is None or mtime > newest[0]:
-            newest = (mtime, name)
-    return newest
+        if since is not None and mtime <= since:
+            continue
+        if not any(start - WINDOW_SLACK <= mtime <= end + WINDOW_SLACK
+                   for start, end in windows):
+            continue
+        if is_code(name, project):
+            found.append((mtime, name.replace("\\", "/")))
+    return found
 
 
-def unverified(event=None):
-    """(blocked, reason) — is there changed code with no newer passing check?
+def unverified(event=None, now=None):
+    """(blocked, reason): did Claude change code with no newer passing check?"""
+    events = _session_events(event, now)
+    if not events:
+        return False, None
 
-    The signal is the filesystem, not the tool log: an edit made through Bash
-    never fires a Write|Edit hook, and a gate that can be stepped around by
-    using a different tool is not a gate.
+    checks = [e for e in events if e.get("kind") == "check"]
+    latest = checks[-1] if checks else None
+    since = _ts(latest) if latest and latest.get("exit") == 0 else None
+
+    changes = [
+        (_ts(e), str(e.get("path", "")).replace("\\", "/"))
+        for e in events
+        if e.get("kind") == "edit" and (since is None or _ts(e) > since)
+    ]
+    windows = [
+        (float(e.get("start", _ts(e))), _ts(e))
+        for e in events
+        if e.get("kind") == "shell" and (since is None or _ts(e) >= since - WINDOW_SLACK)
+    ]
+    if windows:
+        changes.extend(_shell_writes(hook_io.project_dir(event), windows, since))
+    if not changes:
+        return False, None
+
+    _, changed_file = max(changes)
+    if latest is None:
+        return True, f"{changed_file} changed this session, and no check has passed."
+    if latest.get("exit") != 0:
+        return True, (
+            f"the last check (`{latest.get('command')}`) exited {latest.get('exit')}."
+        )
+    return True, (
+        f"`{latest.get('command')}` passed, but {changed_file} changed afterwards."
+    )
+
+
+def note_block(event=None, now=None):
+    """Count a block, and report whether the gate should keep holding.
+
+    Blocks count since the latest edit or passing check: new work, or a green
+    run, earns the gate its nudges back.
     """
-    state = load(event)
-
-    baseline = state.get("session_start")
-    if baseline is None:
-        # No ratchet hook has run yet this session, so there is no window in
-        # which work could have happened. Nothing to judge.
-        return False, None
-
-    check = state.get("last_verification")
-    verified_ts = None
-    if isinstance(check, dict) and check.get("exit") == 0:
-        try:
-            verified_ts = float(check.get("ts", 0))
-        except (TypeError, ValueError):
-            return True, "the recorded verification has no usable timestamp."
-
-    change = latest_code_change(event)
-    if change is None:
-        return False, None
-    change_ts, changed_file = change
-
-    # Only work done during this session counts.
-    try:
-        if change_ts <= float(baseline):
-            return False, None
-    except (TypeError, ValueError):
-        return False, None
-
-    if verified_ts is None:
-        if isinstance(check, dict) and check.get("exit") not in (0, None):
-            return True, (
-                f"the last check (`{check.get('command')}`) exited "
-                f"{check.get('exit')}."
-            )
-        return True, (
-            f"{changed_file} changed this session, and no check has passed."
-        )
-
-    if verified_ts < change_ts:
-        return True, (
-            f"`{check.get('command')}` passed, but {changed_file} changed "
-            "afterwards."
-        )
-    return False, None
-
-
-def note_block(event=None):
-    """Count a block, and report whether the gate should keep holding."""
-    state = load(event)
-    count = int(state.get("consecutive_blocks", 0)) + 1
-    state["consecutive_blocks"] = count
-    save(state, event)
-    return count <= MAX_CONSECUTIVE_BLOCKS
+    count = 0
+    for record in reversed(_session_events(event, now)):
+        kind = record.get("kind")
+        if kind == "edit" or (kind == "check" and record.get("exit") == 0):
+            break
+        if kind == "block":
+            count += 1
+    _append("block", event, now)
+    return count + 1 <= MAX_CONSECUTIVE_BLOCKS

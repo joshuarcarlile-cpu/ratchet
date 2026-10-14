@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""PostToolUse(Write|Edit) hook: record the edit, and warn on file size.
+"""PostToolUse(Write|Edit|NotebookEdit) hook: record the edit, warn on size.
 
 Two jobs, one hook, because both need the same event and adding a second script
 on the same matcher would double the per-edit cost for no gain:
 
-1. Record that a source file changed, arming the verification gate that
-   require_verification.py holds at Stop. This is the half that makes the gate
-   able to tell "nothing needed verifying" from "work went unverified".
+1. Record that Claude changed a code file, arming the verification gate that
+   require_verification.py holds at Stop.
 2. Warn when a file crosses a line budget — advisory only. Large files cost
    context on every read and are where drift accumulates, but only the author
-   can judge whether a given file has earned its length.
+   can judge whether a given file has earned its length. Notebooks are JSON,
+   so their line count says nothing and they get no warning.
 
 Never blocks an edit.
 """
@@ -50,20 +50,19 @@ def count_lines(path):
 def main():
     event = hook_io.read_event()
     path = hook_io.tool_input(event, "file_path")
-    if not path or not isinstance(path, str):
+    notebook = hook_io.tool_input(event, "notebook_path")
+    edited = path if isinstance(path, str) and path else notebook
+    if not edited or not isinstance(edited, str):
         return 0
 
-    # Arm the verification gate. Done before the isfile() check because an edit
-    # counts whether or not the file is still readable from here. The gate's
-    # real signal is the filesystem scan at Stop; this records the filename so
-    # the block message can name it.
+    # Arm the verification gate. Done before the isfile() check because an
+    # edit counts whether or not the file is still readable from here.
     try:
-        session_state.touch_session(event)
-        session_state.record_edit(path, event)
+        session_state.record_edit(edited, event)
     except OSError:
         pass
 
-    if not os.path.isfile(path):
+    if edited != path or not os.path.isfile(path):
         return 0
 
     limit = threshold()

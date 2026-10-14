@@ -13,8 +13,10 @@ Nothing in this module hand-rolls JSON. New hooks should use it rather than
 re-deriving the parsing.
 """
 
+import hashlib
 import json
 import os
+import re
 import sys
 
 
@@ -79,33 +81,41 @@ def project_dir(event=None):
     return os.getcwd()
 
 
-def framework_dir(event=None, create=False):
-    """`<project>/.claude/framework`, where ratchet keeps its own state.
+def data_dir():
+    """`${CLAUDE_PLUGIN_DATA}`, where ratchet keeps its state, or None.
 
-    Every hook that writes here creates the folder through `create=True`, which
-    also gives it its own `.gitignore` of `*`, the way `.pytest_cache` does. The
-    contents are per-machine bookkeeping, so no project should need an ignore
-    entry of its own to keep them out of a commit.
+    State used to live in `<project>/.claude/framework/`, which broke
+    `git clone <url> .` into a fresh folder: the first tool call created the
+    folder, so it was no longer empty. Nothing is written into the project now.
     """
-    path = os.path.join(project_dir(event), ".claude", "framework")
-    if create:
-        os.makedirs(path, exist_ok=True)
-        _ignore_self(path)
-    return path
+    return os.environ.get("CLAUDE_PLUGIN_DATA") or None
 
 
-def _ignore_self(path):
-    """Give a folder a `.gitignore` of `*` if it has none. Best-effort.
+def _project_key(project):
+    """A file name for one project: readable, and stable across spellings.
 
-    Exclusive-create mode never overwrites a file that is already there, and a
-    failure is swallowed: a marker that cannot be written must not cost the
-    hook the state it was about to save.
+    `C:/x/proj/` and its backslashed, lower-case spelling are the same folder,
+    so the hash is taken over the normalised absolute path. The basename keeps
+    the folder findable by eye; the hash keeps two same-named folders apart.
     """
-    try:
-        with open(os.path.join(path, ".gitignore"), "x", encoding="utf-8") as handle:
-            handle.write("# Created by ratchet: local state, never committed.\n*\n")
-    except OSError:
-        pass
+    normalised = os.path.normcase(os.path.abspath(project))
+    digest = hashlib.sha1(normalised.encode("utf-8")).hexdigest()[:10]
+    name = re.sub(r"[^A-Za-z0-9._-]+", "-", os.path.basename(normalised))[:40]
+    return f"{name or 'root'}-{digest}"
+
+
+def event_log_path(event=None):
+    """The project's append-only event log, or None without a data dir."""
+    base = data_dir()
+    if base is None:
+        return None
+    return os.path.join(base, "projects", _project_key(project_dir(event)) + ".jsonl")
+
+
+def tool_log_path():
+    """The command log find-patterns reads, shared by every project."""
+    base = data_dir()
+    return os.path.join(base, "tool-log.jsonl") if base else None
 
 
 def append_jsonl(path, record):

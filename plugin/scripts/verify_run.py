@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
-"""Run the project's check command and record the result.
+"""Run a check command and exit with its exit code.
 
-The point of running the check *through* this script is that the receipt is
-written by whatever actually executed the command. Claude cannot record a pass
-by asserting one — only a real zero exit clears the gate that
-require_verification.py holds.
+For checks the profile's Test line cannot name, such as `bash -n` on whichever
+script changed. The PostToolUse hook that sees this script run reads the
+`--command` and records the result, so the receipt still comes from what
+actually executed: Claude cannot record a pass by asserting one, only a real
+zero exit clears the gate that require_verification.py holds. A check the
+profile does name needs no wrapper; running it directly counts the same.
 
 Usage:
     verify_run.py --command "<the check command>"
-    verify_run.py --session <id> --command "<the check command>"
+
+`--session <id>` is still accepted, for instructions written before 0.3, and
+ignored: the hook knows the session.
 
 The command is taken as one string rather than as trailing argv, deliberately.
 Re-joining split arguments with spaces loses their quoting — `pytest -k "not
@@ -16,7 +20,8 @@ slow"` comes back as four words and the shell re-splits it — so the command is
 never round-tripped through a split/join at all.
 
 Output is streamed through unchanged, and this script exits with the command's
-own exit code so the caller sees the real result.
+own exit code so the caller sees the real result. Piping this script's output
+(`| tail`) hides that exit code, and the hook then records nothing.
 """
 
 import argparse
@@ -27,7 +32,6 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import hook_io  # noqa: E402
-import session_state  # noqa: E402
 
 
 def parse_args(argv):
@@ -48,16 +52,9 @@ def main(argv=None):
         )
         return 2
 
-    # An unsubstituted `${CLAUDE_SESSION_ID}` means the caller's placeholder did
-    # not expand. Recorded as unknown rather than stored as a literal, since it
-    # is diagnostic only — the gate matches on timestamps, not session identity.
-    session = args.session
-    if not session or "${" in session:
-        session = os.environ.get("CLAUDE_SESSION_ID") or None
-
-    # shell=True so the profile's command works as written (`npm test`,
-    # `pytest -q`, `.\gradlew.bat :app:test`). It runs in the platform's default
-    # shell, which is the constraint the profile's command has to satisfy.
+    # shell=True so the command works as written (`bash -n x.sh`, `npm test`).
+    # It runs in the platform's default shell, cmd.exe on Windows, so the
+    # command has to be valid there.
     try:
         completed = subprocess.run(command_text, shell=True)
         exit_code = completed.returncode
@@ -65,12 +62,8 @@ def main(argv=None):
         print(f"ratchet: could not run `{command_text}`: {exc}", file=sys.stderr)
         exit_code = 127
 
-    session_state.record_verification(
-        command=command_text, exit_code=exit_code, session=session
-    )
-
     if exit_code == 0:
-        hook_io.note(f"ratchet: verified — `{command_text}` passed.")
+        hook_io.note(f"ratchet: `{command_text}` passed.")
     else:
         hook_io.note(
             f"ratchet: `{command_text}` exited {exit_code}. "

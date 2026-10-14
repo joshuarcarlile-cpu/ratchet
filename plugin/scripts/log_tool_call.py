@@ -1,8 +1,17 @@
 #!/usr/bin/env python3
-"""PostToolUse(Bash|PowerShell) hook: append a command signature to the tool log.
+"""PostToolUse / PostToolUseFailure (Bash|PowerShell) hook: record a shell call.
 
-Logs the command *shape* only, truncated — never tool output. `find-patterns`
-reads this log to spot sequences worth turning into a script.
+Three records, all appends:
+
+1. The command shape, truncated, to `${CLAUDE_PLUGIN_DATA}/tool-log.jsonl` for
+   `find-patterns`. Never tool output.
+2. The call's time window, so the Stop gate can tell which files Claude's own
+   shell wrote.
+3. A check result, when the call ran the project's check command (see
+   checks.py). This is what clears the gate: a passing run needs no wrapper.
+
+Runs async. It decides nothing, and the Stop hook only reads its records after
+a full model response, by which time they have long landed.
 """
 
 import os
@@ -11,6 +20,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import checks  # noqa: E402
 import hook_io  # noqa: E402
 import session_state  # noqa: E402
 
@@ -19,22 +29,24 @@ MAX_COMMAND_LENGTH = 120
 
 def main():
     event = hook_io.read_event()
-
-    # Bash is often the first tool a session touches, and the verification gate
-    # needs a session baseline from whichever ratchet hook runs first.
-    try:
-        session_state.touch_session(event)
-    except OSError:
-        pass
-
     command = hook_io.tool_input(event, "command")
     if not command or not isinstance(command, str):
         return 0
 
-    record = {"ts": int(time.time()), "cmd": command[:MAX_COMMAND_LENGTH]}
+    log = hook_io.tool_log_path()
+    if log is None:
+        return 0
+    project = hook_io.project_dir(event)
     try:
-        log_dir = hook_io.framework_dir(event, create=True)
-        hook_io.append_jsonl(os.path.join(log_dir, "tool-log.jsonl"), record)
+        hook_io.append_jsonl(log, {
+            "ts": int(time.time()),
+            "cmd": command[:MAX_COMMAND_LENGTH],
+            "project": project,
+        })
+        session_state.record_shell(command, event)
+        outcome = checks.result(event, project)
+        if outcome:
+            session_state.record_check(outcome[0], outcome[1], event)
     except OSError:
         # A hook that cannot write its log has nothing useful to say about it.
         # Failing loudly here would interrupt the user's actual work.
