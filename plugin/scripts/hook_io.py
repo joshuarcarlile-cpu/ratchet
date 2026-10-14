@@ -24,9 +24,17 @@ def read_event():
     Returns an empty dict when stdin is empty or unparseable, so a malformed
     event degrades to "this hook has nothing to say" rather than a traceback.
     A hook that crashes is a hook that blocks the user's tool call.
+
+    Claude Code sends UTF-8. Reading the bytes and decoding them here means a
+    non-ASCII path survives even when Python's own stdin encoding is the
+    Windows code page, which it is for a pipe unless UTF-8 mode is on.
     """
     try:
-        raw = sys.stdin.read()
+        stream = getattr(sys.stdin, "buffer", None)
+        if stream is None:
+            raw = sys.stdin.read()
+        else:
+            raw = stream.read().decode("utf-8", errors="replace")
     except (OSError, UnicodeDecodeError):
         return {}
     if not raw.strip():
@@ -135,13 +143,28 @@ def read_jsonl(path):
     return out
 
 
+def _write_utf8(text):
+    """Write to stdout as UTF-8, whatever Python thinks stdout's encoding is.
+
+    A piped stdout on Windows defaults to the ANSI code page, so the em dash
+    in a block reason reached Claude Code as byte 0x97 and the transcript
+    showed U+FFFD. Writing bytes makes PYTHONUTF8 irrelevant.
+    """
+    stream = getattr(sys.stdout, "buffer", None)
+    if stream is None:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+        return
+    sys.stdout.flush()
+    stream.write(text.encode("utf-8"))
+    stream.flush()
+
+
 def emit(payload):
     """Write a hook's JSON response to stdout."""
-    sys.stdout.write(json.dumps(payload, ensure_ascii=False))
-    sys.stdout.flush()
+    _write_utf8(json.dumps(payload, ensure_ascii=False))
 
 
 def note(message):
     """Print an advisory line for the transcript. Not a blocking signal."""
-    sys.stdout.write(message.rstrip("\n") + "\n")
-    sys.stdout.flush()
+    _write_utf8(message.rstrip("\n") + "\n")
